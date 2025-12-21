@@ -8,8 +8,18 @@ function App() {
   const [theme, setTheme] = useState(
     localStorage.getItem("theme") || "light"
   );
-  useEffect(() => {
 
+  // State management for the entire app
+  const [sessionId, setSessionId] = useState(null);
+  const [transcript, setTranscript] = useState('');
+  const [cleanedTranscript, setCleanedTranscript] = useState('');
+  const [summaries, setSummaries] = useState(null);
+  const [notes, setNotes] = useState(null);
+  const [questions, setQuestions] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
     const root = document.documentElement;
     if (theme === "dark") {
       root.classList.add("dark");
@@ -18,6 +28,28 @@ function App() {
     }
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  // Handle successful upload (from UploadCard)
+  const handleUploadSuccess = (data) => {
+    setSessionId(data.session_id);
+    setTranscript(data.transcript);
+    setCleanedTranscript(data.cleaned_transcript);
+    setError(null);
+  };
+
+  // Handle generation complete
+  const handleGenerationComplete = (generatedData) => {
+    setSummaries(generatedData.summaries);
+    setNotes(generatedData.notes);
+    setQuestions(generatedData.questions);
+    setIsGenerating(false);
+  };
+
+  // Handle errors
+  const handleError = (errorMessage) => {
+    setError(errorMessage);
+    setIsGenerating(false);
+  };
 
   return (
     <>
@@ -68,13 +100,52 @@ function App() {
             Upload a lecture and instantly get notes, summary, exam questions & a doubt chatbot.
           </p>
         </div>
+
+        {/* Global Error Message */}
+        {error && (
+          <div className="max-w-7xl mx-auto mb-6 relative z-10">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1">
+                <h3 className="text-red-900 font-semibold text-sm">Error</h3>
+                <p className="text-red-700 text-sm mt-1">{error}</p>
+              </div>
+              <button 
+                onClick={() => setError(null)}
+                className="text-red-500 hover:text-red-700 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 relative z-10">
           <div className="space-y-6">
-            <UploadCard />
-            <PreviewCard />
+            <UploadCard 
+              onUploadSuccess={handleUploadSuccess}
+              onGenerationComplete={handleGenerationComplete}
+              onError={handleError}
+              isGenerating={isGenerating}
+              setIsGenerating={setIsGenerating}
+            />
+            <PreviewCard 
+              transcript={cleanedTranscript}
+            />
           </div>
-          <ExamPack />
+          <ExamPack 
+            sessionId={sessionId}
+            summaries={summaries}
+            notes={notes}
+            questions={questions}
+            isGenerating={isGenerating}
+          />
         </div>
+        
         <footer className="max-w-7xl mx-auto mt-20 pt-12 pb-8 border-t border-slate-200 relative z-10">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
             {/* Brand Section */}
