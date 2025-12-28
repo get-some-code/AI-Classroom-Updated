@@ -1,232 +1,241 @@
-import { Upload, FileAudio, Sparkles, ChevronRight, Check, Loader2 } from 'lucide-react';
-import { useState, useRef } from 'react';
-import api from '../services/api';
+import {
+  Upload,
+  FileAudio,
+  Sparkles,
+  ChevronRight,
+  Check,
+  Loader2
+} from "lucide-react";
+import { useState, useRef } from "react";
+import api from "../services/api";
 
-export default function UploadCard({ onUploadSuccess, onGenerationComplete, onError, isGenerating, setIsGenerating }) {
-    const [transcript, setTranscript] = useState('');
-    const [isHovered, setIsHovered] = useState(false);
-    const [audioFile, setAudioFile] = useState(null);
-    const [isUploading, setIsUploading] = useState(false);
-    const fileInputRef = useRef(null);
+export default function UploadCard({
+  onUploadSuccess,
+  onGenerationComplete,
+  onError,
+  isGenerating,
+  setIsGenerating
+}) {
+  const [transcript, setTranscript] = useState("");
+  const [audioFile, setAudioFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const fileInputRef = useRef(null);
 
-    // Handle file selection
-    const handleFileSelect = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            // Validate file type
-            const validTypes = ['audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/mp3', 'audio/ogg', 'audio/flac'];
-            const validExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.flac'];
-            const fileExtension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+  /* ---------------- FILE SELECT ---------------- */
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-            if (!validTypes.includes(file.type) && !validExtensions.includes(fileExtension)) {
-                onError('Invalid file type. Please upload MP3, WAV, M4A, OGG, or FLAC audio files.');
-                return;
-            }
+    const validExt = [".mp3", ".wav", ".m4a", ".ogg", ".flac"];
+    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
 
-            // Check file size (max 100MB)
-            const maxSize = 100 * 1024 * 1024; // 100MB
-            if (file.size > maxSize) {
-                onError('File too large. Please upload files smaller than 100MB.');
-                return;
-            }
+    if (!validExt.includes(ext)) {
+      onError("Invalid file type. Upload MP3, WAV, M4A, OGG, or FLAC.");
+      return;
+    }
 
-            setAudioFile(file);
-            setTranscript(''); // Clear transcript if file is selected
-            onError(null); // Clear any previous errors
-        }
-    };
+    if (file.size > 100 * 1024 * 1024) {
+      onError("File too large. Max size is 100MB.");
+      return;
+    }
 
-    // Handle generate button click
-    const handleGenerate = async () => {
-        // Validate input
-        if (!audioFile && !transcript.trim()) {
-            onError('Please either upload an audio file or paste a transcript.');
-            return;
-        }
+    setAudioFile(file);
+    setTranscript("");
+    onError(null);
+  };
 
-        setIsUploading(true);
-        setIsGenerating(true);
-        onError(null);
+  /* ---------------- GENERATE ---------------- */
+  const handleGenerate = async () => {
+    if (isUploading || isGenerating) return;
 
-        try {
-            let sessionId;
+    if (!audioFile && !transcript.trim()) {
+      onError("Upload audio or paste transcript.");
+      return;
+    }
 
-            // Step 1: Upload audio or transcript
-            if (audioFile) {
-                console.log('Uploading audio file...');
-                const uploadResponse = await api.uploadAudio(audioFile);
-                sessionId = uploadResponse.session_id;
-                onUploadSuccess(uploadResponse);
-                console.log('Audio uploaded successfully!', uploadResponse);
-            } else if (transcript.trim()) {
-                console.log('Uploading transcript...');
-                const uploadResponse = await api.uploadTranscript(transcript);
-                sessionId = uploadResponse.session_id;
-                onUploadSuccess(uploadResponse);
-                console.log('Transcript uploaded successfully!', uploadResponse);
-            }
+    setIsUploading(true);
+    setIsGenerating(true);
+    onError(null);
 
-            setIsUploading(false);
+    try {
+      let sessionId;
 
-            // Step 2: Generate all content in parallel
-            console.log('Generating exam pack...');
-            const [summaries, notes, questions] = await Promise.all([
-                api.generateSummary(sessionId),
-                api.generateNotes(sessionId),
-                api.generateQuestions(sessionId)
-            ]);
+      // 1️⃣ Upload
+      if (audioFile) {
+        const res = await api.uploadAudio(audioFile);
+        sessionId = res.session_id;
+        onUploadSuccess(res);
+      } else {
+        const res = await api.uploadTranscript(transcript);
+        sessionId = res.session_id;
+        onUploadSuccess(res);
+      }
 
-            console.log('Generation complete!', { summaries, notes, questions });
+      setIsUploading(false);
 
-            // Pass all generated data to parent
-            onGenerationComplete({
-                summaries,
-                notes,
-                questions
-            });
+      // 2️⃣ SINGLE generation call
+      const examPack = await api.generateExamPack(sessionId);
 
-            // Clear form after successful generation
-            setAudioFile(null);
-            setTranscript('');
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
+      // 3️⃣ Pass unified result
+      if (typeof onGenerationComplete === "function") {
+        onGenerationComplete(examPack);
+      }
 
-        } catch (err) {
-            console.error('Error:', err);
-            onError(err.message || 'An error occurred. Please try again.');
-            setIsUploading(false);
-            setIsGenerating(false);
-        }
-    };
+      // Reset UI
+      setAudioFile(null);
+      setTranscript("");
+      fileInputRef.current && (fileInputRef.current.value = "");
+    } catch (err) {
+      console.error(err);
+      onError(err.message || "Generation failed.");
+      setIsGenerating(false);
+    }
+  };
 
-    // Handle clicking on the upload area
-    const handleUploadAreaClick = () => {
-        if (!isUploading && !isGenerating) {
-            fileInputRef.current?.click();
-        }
-    };
-
-    return (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden transform transition-all duration-300 hover:shadow-2xl hover:shadow-slate-300/50 hover:-translate-y-1">
-            <div className="p-8">
-                <div className="flex items-center gap-3 mb-6">
-                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-2.5 rounded-xl shadow-lg shadow-blue-500/30">
-                        <Upload className="w-5 h-5 text-white" />
-                    </div>
-                    <h2 className="text-2xl font-bold text-slate-900">1. Upload lecture</h2>
-                </div>
-                <p className="text-slate-600 mb-6">Use audio OR paste raw transcript text.</p>
-
-                {/* Audio Upload Section */}
-                <div className="relative group mb-6">
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac"
-                        onChange={handleFileSelect}
-                        className="hidden"
-                        disabled={isUploading || isGenerating}
-                    />
-                    <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-0 group-hover:opacity-100 blur transition duration-300"></div>
-                    <div
-                        onClick={handleUploadAreaClick}
-                        className={`relative bg-slate-50 border-2 border-dashed ${audioFile ? 'border-emerald-400 bg-emerald-50/30' : 'border-slate-300 hover:border-blue-400'
-                            } rounded-2xl p-10 text-center transition-all duration-300 cursor-pointer group-hover:bg-blue-50/50 ${isUploading || isGenerating ? 'opacity-50 cursor-not-allowed' : ''
-                            }`}
-                    >
-                        <div className="relative inline-block mb-4">
-                            <div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl group-hover:blur-2xl transition-all duration-300"></div>
-                            <FileAudio className={`w-14 h-14 ${audioFile ? 'text-emerald-500' : 'text-blue-500'
-                                } relative group-hover:scale-110 transition-transform duration-300`} />
-                        </div>
-                        <h3 className="text-lg font-semibold text-slate-900 mb-2">
-                            {audioFile ? 'Audio file selected!' : 'Select audio file'}
-                        </h3>
-                        <p className="text-slate-600 text-sm mb-1">
-                            Click to choose a lecture recording (MP3 / WAV / M4A).
-                        </p>
-                        <p className={`text-sm mb-3 ${audioFile ? 'text-emerald-600 font-medium' : 'text-slate-500'}`}>
-                            {audioFile ? `📁 ${audioFile.name}` : 'No file selected.'}
-                        </p>
-                        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg">
-                            <Check className="w-4 h-4 text-emerald-600" />
-                            <p className="text-emerald-700 text-xs font-medium">
-                                Optional: skip file and paste transcript below
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Transcript Input */}
-                <div className="mb-6">
-                    <label className="text-slate-700 text-sm mb-2 block font-medium">Or paste transcript manually:</label>
-                    <textarea
-                        value={transcript}
-                        onChange={(e) => {
-                            setTranscript(e.target.value);
-                            if (e.target.value.trim()) {
-                                setAudioFile(null); // Clear file if transcript is entered
-                                if (fileInputRef.current) {
-                                    fileInputRef.current.value = '';
-                                }
-                            }
-                        }}
-                        placeholder="Paste your lecture transcript here if you already have it..."
-                        className="w-full h-32 bg-white border border-slate-300 rounded-xl p-4 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all duration-200 resize-none shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isUploading || isGenerating}
-                    />
-                    {transcript.trim() && (
-                        <p className="text-xs text-slate-500 mt-2">
-                            {transcript.trim().split(' ').length} words
-                        </p>
-                    )}
-                </div>
-
-                {/* Loading Status */}
-                {(isUploading || isGenerating) && (
-                    <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
-                        <div className="flex items-center gap-3">
-                            <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
-                            <div className="flex-1">
-                                <p className="text-blue-900 font-medium text-sm">
-                                    {isUploading ? 'Uploading and transcribing...' : 'Generating exam pack...'}
-                                </p>
-                                <p className="text-blue-700 text-xs mt-1">
-                                    {isUploading
-                                        ? 'This may take a minute for audio files.'
-                                        : 'Creating summaries, notes, and questions. Please wait...'}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Generate Button */}
-                <div className="relative group">
-                    <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl blur opacity-30 group-hover:opacity-100 transition duration-300"></div>
-                    <button
-                        onClick={handleGenerate}
-                        onMouseEnter={() => setIsHovered(true)}
-                        onMouseLeave={() => setIsHovered(false)}
-                        disabled={isUploading || isGenerating || (!audioFile && !transcript.trim())}
-                        className="relative w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold py-4 rounded-xl transition-all duration-200 transform hover:scale-[1.02] flex items-center justify-center gap-2 shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-                    >
-                        {isUploading || isGenerating ? (
-                            <>
-                                <Loader2 className="w-5 h-5 animate-spin" />
-                                {isUploading ? 'Processing...' : 'Generating...'}
-                            </>
-                        ) : (
-                            <>
-                                <Sparkles className={`w-5 h-5 transition-transform duration-300 ${isHovered ? 'rotate-12' : ''}`} />
-                                Generate Exam Pack
-                                <ChevronRight className={`w-5 h-5 transition-transform duration-300 ${isHovered ? 'translate-x-1' : ''}`} />
-                            </>
-                        )}
-                    </button>
-                </div>
-            </div>
+  /* ---------------- UI ---------------- */
+  return (
+    <div
+      className="
+      bg-white
+      rounded-3xl
+      border border-slate-200
+      shadow-2xl shadow-slate-900/20
+      p-8
+      transition-all duration-300
+      hover:shadow-slate-900/30
+      hover:-translate-y-1
+    "
+    >
+      {/* Header */}
+      <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-slate-900">
+        <div className="p-2 rounded-xl bg-indigo-100">
+          <Upload className="w-5 h-5 text-indigo-600" />
         </div>
-    )
+        Upload Lecture
+      </h2>
+
+      {/* Audio Upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*"
+        onChange={handleFileSelect}
+        hidden
+        disabled={isUploading || isGenerating}
+      />
+
+      <div
+        onClick={() =>
+          !isUploading && !isGenerating && fileInputRef.current?.click()
+        }
+        className={`
+        relative
+        border-2 border-dashed
+        rounded-2xl
+        p-8
+        text-center
+        cursor-pointer
+        transition-all duration-300
+        ${audioFile
+            ? "border-emerald-400 bg-emerald-50"
+            : "border-slate-300 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
+          }
+        ${isUploading || isGenerating
+            ? "opacity-50 cursor-not-allowed"
+            : "hover:shadow-md"
+          }
+      `}
+      >
+        <FileAudio className="w-12 h-12 mx-auto mb-3 text-indigo-600" />
+
+        <p className="font-medium text-slate-900">
+          {audioFile ? audioFile.name : "Click to upload audio"}
+        </p>
+
+        <p className="text-xs text-slate-600 mt-1">
+          MP3, WAV, M4A, OGG, FLAC
+        </p>
+
+        <div className="inline-flex items-center gap-1 mt-4 text-emerald-700 text-xs font-medium">
+          <Check className="w-4 h-4" />
+          Or paste transcript below
+        </div>
+      </div>
+
+      {/* Transcript */}
+      <textarea
+        value={transcript}
+        onChange={(e) => {
+          setTranscript(e.target.value);
+          if (e.target.value.trim()) {
+            setAudioFile(null);
+            fileInputRef.current && (fileInputRef.current.value = "");
+          }
+        }}
+        placeholder="Paste transcript here..."
+        disabled={isUploading || isGenerating}
+        className="
+        w-full mt-5 h-32
+        border border-slate-300
+        rounded-2xl
+        p-4
+        text-sm text-slate-900
+        placeholder:text-slate-400
+        resize-none
+        focus:outline-none
+        focus:ring-2 focus:ring-indigo-500
+        focus:border-indigo-500
+        transition-all
+        disabled:bg-slate-100
+      "
+      />
+
+      {/* Status */}
+      {(isUploading || isGenerating) && (
+        <div className="mt-4 flex items-center gap-2 text-indigo-600 text-sm font-medium">
+          <Loader2 className="animate-spin w-5 h-5" />
+          {isUploading ? "Uploading audio…" : "Generating exam pack…"}
+        </div>
+      )}
+
+      {/* CTA Button */}
+      <button
+        onClick={handleGenerate}
+        disabled={isUploading || isGenerating}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        className="
+        mt-6 w-full py-4
+        bg-gradient-to-r from-indigo-600 to-blue-600
+        text-white
+        rounded-2xl
+        flex justify-center items-center gap-2
+        font-semibold
+        shadow-xl shadow-indigo-600/40
+        transition-all duration-300
+        hover:shadow-2xl hover:shadow-indigo-700/50
+        hover:-translate-y-0.5
+        active:scale-[0.98]
+        disabled:opacity-50 disabled:cursor-not-allowed
+      "
+      >
+        {isUploading || isGenerating ? (
+          <Loader2 className="animate-spin w-5 h-5" />
+        ) : (
+          <>
+            <Sparkles
+              className={`transition-transform duration-300 ${isHovered ? "rotate-12 scale-110" : ""
+                }`}
+            />
+            Generate Exam Pack
+            <ChevronRight
+              className={`transition-transform duration-300 ${isHovered ? "translate-x-1" : ""
+                }`}
+            />
+          </>
+        )}
+      </button>
+    </div>
+  );
 }

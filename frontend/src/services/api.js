@@ -1,146 +1,89 @@
-// src/services/api.js
-// API Service for Preply Backend
-
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = "http://localhost:8000";
 
 class PreplyAPI {
+  /* ---------------- UPLOAD ---------------- */
 
-    /**
-     * Upload audio file for transcription
-     */
-    async uploadAudio(audioFile) {
-        const formData = new FormData();
-        formData.append('file', audioFile);
+  async uploadTranscript(transcript) {
+    const res = await fetch(`${API_BASE_URL}/api/upload-transcript`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript }),
+    });
 
-        const response = await fetch(`${API_BASE_URL}/api/upload-audio`, {
-            method: 'POST',
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to upload audio');
-        }
-
-        return await response.json();
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Transcript upload failed");
     }
 
-    /**
-     * Upload transcript text
-     */
-    async uploadTranscript(transcriptText) {
-        const response = await fetch(`${API_BASE_URL}/api/upload-transcript`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ transcript: transcriptText }),
-        });
+    return res.json(); // { session_id }
+  }
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to upload transcript');
-        }
+  async uploadAudio(file) {
+    const fd = new FormData();
+    fd.append("file", file);
 
-        return await response.json();
+    const res = await fetch(`${API_BASE_URL}/api/upload-audio`, {
+      method: "POST",
+      body: fd,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Audio upload failed");
     }
 
-    /**
-     * Generate summaries (Short, Medium, Detailed)
-     */
-    async generateSummary(sessionId) {
-        const response = await fetch(`${API_BASE_URL}/api/generate-summary/${sessionId}`);
+    return res.json(); // { session_id, transcript, cleaned_transcript }
+  }
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to generate summary');
-        }
+  /* ---------------- EXAM PACK ---------------- */
 
-        return await response.json();
+  async generateExamPack(sessionId) {
+    const res = await fetch(
+      `${API_BASE_URL}/api/generate-exam-pack/${sessionId}`
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Exam pack generation failed");
     }
 
-    /**
-     * Generate structured notes
-     */
-    async generateNotes(sessionId) {
-        const response = await fetch(`${API_BASE_URL}/api/generate-notes/${sessionId}`);
+    return res.json(); // { summary, notes, questions }
+  }
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to generate notes');
-        }
+  async regenerateQuestions(sessionId) {
+    const res = await fetch(
+      `${API_BASE_URL}/api/regenerate-questions/${sessionId}`,
+      { method: "POST" }
+    );
 
-        return await response.json();
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Question regeneration failed");
     }
 
-    /**
-     * Generate exam questions (MCQ, Short Answer, Long Answer)
-     */
-    async generateQuestions(sessionId) {
-        const response = await fetch(`${API_BASE_URL}/api/generate-questions/${sessionId}`);
+    return res.json(); // questions only
+  }
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to generate questions');
-        }
+  /* ---------------- CHATBOT ---------------- */
 
-        return await response.json();
+  async askChatbot(sessionId, question) {
+    const res = await fetch(`${API_BASE_URL}/api/chatbot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        question,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Chatbot failed");
     }
 
-    /**
-     * Ask chatbot a question
-     */
-    async askChatbot(sessionId, question) {
-        const response = await fetch(`${API_BASE_URL}/api/chatbot`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                session_id: sessionId,
-                question: question,
-            }),
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to get chatbot response');
-        }
-
-        return await response.json();
-    }
-
-    /**
-     * Get session information
-     */
-    async getSession(sessionId) {
-        const response = await fetch(`${API_BASE_URL}/api/session/${sessionId}`);
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Session not found');
-        }
-
-        return await response.json();
-    }
-
-    /**
-     * Delete session
-     */
-    async deleteSession(sessionId) {
-        const response = await fetch(`${API_BASE_URL}/api/session/${sessionId}`, {
-            method: 'DELETE',
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to delete session');
-        }
-
-        return await response.json();
-    }
+    return res.json(); // { answer, confidence, sources }
+  }
 }
 
-// Export singleton instance
 export const api = new PreplyAPI();
 export default api;
