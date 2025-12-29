@@ -6,7 +6,7 @@ Quota-safe, production-grade backend (updated)
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import google.generativeai as genai
 import whisper
 import os
@@ -26,7 +26,7 @@ from sentence_transformers import SentenceTransformer
 # APP SETUP
 # --------------------------------------------------
 
-app = FastAPI(title="Preply API", version="3.1.0")
+app = FastAPI(title="Preply API", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,10 +43,15 @@ app.add_middleware(
 load_dotenv()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_KEY:
-    raise RuntimeError("GEMINI_API_KEY not set in environment")
+    # Fallback for dev environments if needed, but warning is better
+    print("WARNING: GEMINI_API_KEY not found in environment variables.")
 
-genai.configure(api_key=GEMINI_KEY)
-gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+# Configure GenAI only if key is present to avoid immediate crash on import
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+else:
+    gemini_model = None
 
 gemini_lock = asyncio.Lock()
 
@@ -54,11 +59,21 @@ gemini_lock = asyncio.Lock()
 whisper_model: Optional[object] = None
 
 # Embedding + vector DB
+# We use a lightweight model for speed/memory efficiency
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 qdrant_client = QdrantClient(":memory:")
 
 # In-memory stores (replace with persistent DB in production)
+# Structure:
+# sessions[id] = {
+#    "transcript": str,
+#    "cleaned": str,
+#    "created_at": str,
+#    "chat_history": List[Dict[str, str]]  <-- NEW: Stores conversation context
+# }
 sessions: Dict[str, dict] = {}
+
+# generation_cache[id] = { "summary": ..., "questions": ... }
 generation_cache: Dict[str, dict] = {}
 
 # --------------------------------------------------
@@ -83,11 +98,20 @@ def clean_transcript(text: str) -> str:
         text = re.sub(rf"\b{w}\b", "", text, flags=re.I)
     return text.strip()
 
-def chunk_transcript(text: str, size: int = 200) -> List[str]:
+def chunk_transcript(text: str, size: int = 250) -> List[str]:
+    """Chunking text for vector embedding."""
     words = text.split()
     if not words:
         return []
-    return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
+    # Overlap slightly for better context continuity (optional but good practice)
+    overlap = 20
+    chunks = []
+    for i in range(0, len(words), size - overlap):
+        chunk = " ".join(words[i:i + size])
+        chunks.append(chunk)
+        if i + size >= len(words):
+            break
+    return chunks
 
 def create_vector_collection(session_id: str, transcript: str):
     """Create collection for a session and upsert chunk vectors."""
@@ -95,10 +119,9 @@ def create_vector_collection(session_id: str, transcript: str):
         return
 
     collection = f"session_{session_id}"
-    # Create collection if not exists
     try:
+        # Check if exists (throws if not)
         qdrant_client.get_collection(collection_name=collection)
-        # if exists, we may optionally delete & recreate, but keep existing for now
     except Exception:
         qdrant_client.create_collection(
             collection_name=collection,
@@ -110,22 +133,25 @@ def create_vector_collection(session_id: str, transcript: str):
     for idx, chunk in enumerate(chunks):
         vec = embedding_model.encode(chunk).tolist()
         points.append(PointStruct(id=idx, vector=vec, payload={"text": chunk}))
+    
     if points:
         qdrant_client.upsert(collection_name=collection, points=points)
 
-def safe_search_similar_chunks(session_id: str, query: str, k: int = 3) -> List[str]:
-    """Wrap qdrant search and return empty list if collection missing or search fails."""
+def safe_search_similar_chunks(session_id: str, query: str, k: int = 4) -> List[str]:
+    """Wrap qdrant search."""
     collection = f"session_{session_id}"
     try:
         vec = embedding_model.encode(query).tolist()
         results = qdrant_client.search(collection_name=collection, query_vector=vec, limit=k)
-        return [r.payload.get("text", "") for r in results]
+        return [r.payload.get("text", "") for r in results if r.score > 0.3] # Score threshold
     except Exception:
-        # fallback silently to empty list
         return []
 
-async def generate_gemini(prompt: str, max_tokens: int = 2048) -> str:
+async def generate_gemini(prompt: str, max_tokens: int = 2048, temperature: float = 0.6) -> str:
     """Single place to call Gemini with a simple retry on rate-limit."""
+    if not gemini_model:
+        raise HTTPException(status_code=500, detail="Gemini API Key not configured")
+
     async with gemini_lock:
         # up to 3 tries for transient 429
         for attempt in range(3):
@@ -134,22 +160,18 @@ async def generate_gemini(prompt: str, max_tokens: int = 2048) -> str:
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         max_output_tokens=max_tokens,
-                        temperature=0.6,
+                        temperature=temperature,
                     ),
                 )
-                # res may be a structured object; return text attribute if present
                 if hasattr(res, "text"):
                     return res.text
-                # fallback to str()
                 return str(res)
             except Exception as e:
                 msg = str(e)
-                # basic detection for rate-limit; wait and retry once
                 if "429" in msg or "Quota exceeded" in msg:
                     if attempt < 2:
-                        await asyncio.sleep(7 + attempt * 3)
+                        await asyncio.sleep(2 + attempt * 2)
                         continue
-                # non-retryable -> raise
                 raise HTTPException(status_code=500, detail=f"Gemini error: {msg}")
         raise HTTPException(status_code=500, detail="Gemini failed after retries")
 
@@ -158,25 +180,18 @@ async def generate_gemini(prompt: str, max_tokens: int = 2048) -> str:
 # --------------------------------------------------
 
 def _map_index_to_label(i: int) -> Optional[str]:
-    if i < 0:
-        return None
+    if i < 0: return None
     labels = ["A", "B", "C", "D"]
     return labels[i] if i < len(labels) else None
 
 def normalize_mcq_list(mcqs: List[dict]) -> List[dict]:
-    """
-    Accepts a list of candidate MCQ dicts returned by the LLM and
-    returns a list guaranteed to have options as {A,B,C,D} and a correct_answer label.
-    Un-normalizable items are skipped.
-    """
+    """Guarantees options are {A,B,C,D} and correct_answer is a valid label."""
     normalized = []
     for q in (mcqs or []):
-        if not isinstance(q, dict):
-            continue
+        if not isinstance(q, dict): continue
 
         question_text = q.get("question") or q.get("prompt") or ""
-        if not question_text:
-            continue
+        if not question_text: continue
 
         raw_opts = q.get("options", {})
         opts: Dict[str, str] = {}
@@ -185,65 +200,50 @@ def normalize_mcq_list(mcqs: List[dict]) -> List[dict]:
         if isinstance(raw_opts, list):
             for i, val in enumerate(raw_opts[:4]):
                 label = _map_index_to_label(i)
-                if label:
-                    opts[label] = val
+                if label: opts[label] = val
         elif isinstance(raw_opts, dict):
-            # Normalize keys to uppercase single-letter when possible
             for k, v in raw_opts.items():
-                if isinstance(k, str) and len(k.strip()) == 1 and k.strip().isalpha():
-                    opts[k.strip().upper()] = v
+                k_clean = str(k).strip().upper()
+                # If key is 0/1/2/3, map to A/B/C/D, else keep letter
+                if k_clean.isdigit():
+                    lbl = _map_index_to_label(int(k_clean))
+                    if lbl: opts[lbl] = v
+                elif len(k_clean) == 1 and k_clean.isalpha():
+                    opts[k_clean] = v
                 else:
-                    # if keys are numbers "0","1", map them to letters
-                    try:
-                        i = int(k)
-                        lbl = _map_index_to_label(i)
-                        if lbl:
-                            opts[lbl] = v
-                        else:
-                            # otherwise, just keep as-is with uppercase key
-                            opts[str(k).upper()] = v
-                    except Exception:
-                        opts[str(k).upper()] = v
-        else:
-            # unsupported options shape
-            continue
+                    opts[k_clean[:1]] = v # Fallback taking first char
 
-        # attempt to determine correct answer
+        # Determine correct answer
         correct = q.get("correct_answer") or q.get("answer") or q.get("key") or q.get("correct")
         chosen_label = None
 
         if isinstance(correct, str):
-            c = correct.strip()
-            # if letter like A/B/C/D
-            if len(c) == 1 and c.upper() in opts:
-                chosen_label = c.upper()
+            c = correct.strip().upper()
+            if len(c) == 1 and c in opts:
+                chosen_label = c
             else:
-                # try to match by text equality to an option
+                # Text matching
                 for label, text in opts.items():
-                    if text and c.lower() == str(text).strip().lower():
+                    if text and str(correct).lower() in str(text).lower():
                         chosen_label = label
                         break
-        elif isinstance(correct, (int, float)):
-            chosen_label = _map_index_to_label(int(correct))
+        elif isinstance(correct, int):
+            chosen_label = _map_index_to_label(correct)
 
-        # As a last resort, if there is an 'answer' field providing option index as "1" etc.
-        if not chosen_label and isinstance(q.get("answer"), (str, int)):
-            a = q.get("answer")
-            if isinstance(a, str) and a.isdigit():
-                chosen_label = _map_index_to_label(int(a))
-            elif isinstance(a, int):
-                chosen_label = _map_index_to_label(a)
+        # Fallback to "answer" field
+        if not chosen_label and "answer" in q:
+             a = q["answer"]
+             if isinstance(a, int): chosen_label = _map_index_to_label(a)
+             elif isinstance(a, str) and a.isdigit(): chosen_label = _map_index_to_label(int(a))
 
-        # If still not found, skip this MCQ to avoid sending malformed items
         if not chosen_label or chosen_label not in opts:
             continue
 
-        explanation = q.get("explanation") or q.get("explain") or ""
         normalized.append({
             "question": question_text,
             "options": opts,
             "correct_answer": chosen_label,
-            "explanation": explanation
+            "explanation": q.get("explanation") or q.get("explain") or ""
         })
 
     return normalized
@@ -254,36 +254,32 @@ def normalize_mcq_list(mcqs: List[dict]) -> List[dict]:
 
 @app.post("/api/upload-audio")
 async def upload_audio(file: UploadFile = File(...)):
-    """
-    Transcribe audio via Whisper, create a session and vector collection,
-    and return session_id + transcripts.
-    """
     global whisper_model
-    # Validate file extension quickly
-    if not file.filename.lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".flac")):
+    if not file.filename.lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm")):
         raise HTTPException(status_code=400, detail="Unsupported audio format")
 
     if whisper_model is None:
         whisper_model = whisper.load_model("base")
 
-    # Save temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        # Transcribe
         result = whisper_model.transcribe(tmp_path)
         raw_text = result.get("text", "") if isinstance(result, dict) else str(result)
         cleaned = clean_transcript(raw_text)
         session_id = str(uuid.uuid4())
+        
+        # Init session with chat history
         sessions[session_id] = {
             "transcript": raw_text,
             "cleaned": cleaned,
             "created_at": datetime.now().isoformat(),
+            "chat_history": [] 
         }
-        # create vectors
+        
         create_vector_collection(session_id, cleaned)
         return {"session_id": session_id, "transcript": raw_text, "cleaned_transcript": cleaned}
     finally:
@@ -294,24 +290,25 @@ async def upload_audio(file: UploadFile = File(...)):
 
 @app.post("/api/upload-transcript")
 async def upload_transcript(req: TranscriptRequest):
-    """Accept raw transcript text, create session and vectors, return session info."""
     if not req.transcript or not req.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript empty")
 
     raw = req.transcript
     cleaned = clean_transcript(raw)
     session_id = str(uuid.uuid4())
+    
     sessions[session_id] = {
         "transcript": raw,
         "cleaned": cleaned,
         "created_at": datetime.now().isoformat(),
+        "chat_history": []
     }
+    
     create_vector_collection(session_id, cleaned)
     return {"session_id": session_id, "transcript": raw, "cleaned_transcript": cleaned}
 
 @app.get("/api/generate-exam-pack/{session_id}")
 async def generate_exam_pack(session_id: str):
-    """Single Gemeni call to produce summary, notes, and questions. Results cached per session."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -320,76 +317,55 @@ async def generate_exam_pack(session_id: str):
 
     transcript = sessions[session_id]["cleaned"]
 
-    # Strict JSON instruction to minimize formatting issues
     prompt = f"""
-You are a helpful assistant that MUST return valid JSON only (no explanation, no markdown).
-Create exam-ready materials from the lecture transcript.
+You are an expert tutor. Create exam-ready materials from this lecture transcript.
+Output valid JSON only.
 
 Requirements:
-- Return a JSON object exactly matching the structure below.
-- Generate at least 5 MCQs.
-- Every MCQ MUST include options A,B,C,D (as keys) and correct_answer must be one of "A","B","C","D".
-- Provide an explanation for each MCQ.
+1. SUMMARY: A nested object with short (1 sentence), medium (1 paragraph), and detailed (bullets) summaries.
+2. NOTES: Markdown formatted study notes.
+3. QUESTIONS: 
+   - 5+ Multiple Choice Questions (keys A,B,C,D; correct_answer A-D).
+   - 3 Short Answer Questions.
+   - 2 Long Answer Questions (Essay style) with key points.
 
-Return this exact JSON shape:
-
+Output Format:
 {{
-  "summary": {{
-    "short_summary": "...",
-    "medium_summary": "...",
-    "detailed_summary": "..."
-  }},
-  "notes": "...",
+  "summary": {{ "short_summary": "...", "medium_summary": "...", "detailed_summary": "..." }},
+  "notes": "markdown string...",
   "questions": {{
-    "mcq_questions": [
-      {{
-        "question": "...",
-        "options": {{
-          "A": "...",
-          "B": "...",
-          "C": "...",
-          "D": "..."
-        }},
-        "correct_answer": "A",
-        "explanation": "..."
-      }}
-    ],
-    "short_answer_questions": [
-      {{
-        "question": "...",
-        "suggested_answer": "..."
-      }}
-    ],
-    "long_answer_questions": [
-      {{
-        "question": "...",
-        "key_points": ["...","..."]
-      }}
-    ]
+    "mcq_questions": [ {{ "question": "...", "options": {{ "A": "..." }}, "correct_answer": "A", "explanation": "..." }} ],
+    "short_answer_questions": [ {{ "question": "...", "suggested_answer": "..." }} ],
+    "long_answer_questions": [ {{ "question": "...", "key_points": ["..."] }} ]
   }}
 }}
 
-Transcript:
-{transcript}
-"""
+TRANSCRIPT:
+{transcript[:25000]} 
+""" # Limit transcript length slightly to be safe, though Flash supports much more
 
-    raw = await generate_gemini(prompt, max_tokens=3000)
+    raw = await generate_gemini(prompt, max_tokens=4000)
+    
+    # Robust JSON parsing
+    cleaned_json = raw.replace("```json", "").replace("```", "").strip()
+    # Sometimes models return a preamble, try to find the first { and last }
+    start = cleaned_json.find("{")
+    end = cleaned_json.rfind("}")
+    if start != -1 and end != -1:
+        cleaned_json = cleaned_json[start:end+1]
 
-    # Attempt to parse returned JSON robustly
-    cleaned = raw.replace("```json", "").replace("```", "").strip()
     try:
-        data = json.loads(cleaned)
+        data = json.loads(cleaned_json)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generated content not valid JSON: {str(e)}")
+        # Fallback: attempt to heal or just error
+        raise HTTPException(status_code=500, detail=f"Generated invalid JSON: {str(e)}")
 
-    # Defensive structure fixes
+    # Normalize MCQs
     questions_block = data.get("questions", {})
-    mcqs_raw = questions_block.get("mcq_questions", [])
-    mcqs = normalize_mcq_list(mcqs_raw)
-
-    # ensure at least some default arrays exist
-    data.setdefault("summary", {"short_summary": "", "medium_summary": "", "detailed_summary": ""})
-    data.setdefault("notes", "")
+    mcqs = normalize_mcq_list(questions_block.get("mcq_questions", []))
+    
+    data.setdefault("summary", {"short_summary": "Summary unavailable", "medium_summary": "", "detailed_summary": ""})
+    data.setdefault("notes", "Notes unavailable")
     data["questions"] = {
         "mcq_questions": mcqs,
         "short_answer_questions": questions_block.get("short_answer_questions", []),
@@ -401,88 +377,134 @@ Transcript:
 
 @app.post("/api/regenerate-questions/{session_id}")
 async def regenerate_questions(session_id: str):
-    """Regenerate only questions for a session (single Gemini call)."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    # Ensure a cache entry exists
+    
+    # If cache empty, generate full pack first to ensure we have context/summary logic if needed later
     if session_id not in generation_cache:
-        # generate full pack first (this populates cache)
         await generate_exam_pack(session_id)
 
     transcript = sessions[session_id]["cleaned"]
 
     prompt = f"""
-Return JSON with only the questions block (same MCQ rules as before).
-Return EXACT JSON for the questions field:
-
-{{
-  "mcq_questions": [],
-  "short_answer_questions": [],
-  "long_answer_questions": []
-}}
+Generate a NEW set of questions (MCQ, Short, Long) based on the transcript.
+Return JSON strictly: {{ "mcq_questions": [...], "short_answer_questions": [...], "long_answer_questions": [...] }}
+Make sure MCQs use keys A,B,C,D.
 
 Transcript:
-{transcript}
+{transcript[:20000]}
 """
-    raw = await generate_gemini(prompt, max_tokens=1800)
+    raw = await generate_gemini(prompt, max_tokens=2000)
     cleaned = raw.replace("```json", "").replace("```", "").strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1:
+        cleaned = cleaned[start:end+1]
+
     try:
         qdata = json.loads(cleaned)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Regeneration did not return valid JSON: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to parse regenerated questions")
 
     mcqs = normalize_mcq_list(qdata.get("mcq_questions", []))
-    # update questions in cache safely
-    generation_cache[session_id]["questions"] = {
+    
+    new_questions = {
         "mcq_questions": mcqs,
         "short_answer_questions": qdata.get("short_answer_questions", []),
         "long_answer_questions": qdata.get("long_answer_questions", []),
     }
-
-    return generation_cache[session_id]["questions"]
+    
+    generation_cache[session_id]["questions"] = new_questions
+    return new_questions
 
 @app.post("/api/chatbot")
 async def chatbot(req: ChatMessage):
+    """
+    Stateful chatbot endpoint.
+    Uses: 
+    1. Global Summary (if available)
+    2. Vector Search Chunks (Specific details)
+    3. Conversation History (Context)
+    """
     if req.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # attempt RAG search; if fails or very weak, fall back to full transcript
-    chunks = safe_search_similar_chunks(req.session_id, req.question, k=3)
-    context = "\n\n".join(chunks) if chunks else ""
+    session_data = sessions[req.session_id]
+    
+    # 1. Retrieve Global Context (Summary)
+    summary_context = ""
+    if req.session_id in generation_cache:
+        s = generation_cache[req.session_id].get("summary", {})
+        if isinstance(s, dict):
+            summary_context = f"Lecture Summary: {s.get('short_summary', '')}\n{s.get('detailed_summary', '')}"
 
-    if len(context) < 150:
-        context = sessions[req.session_id].get("cleaned", "")
+    # 2. Retrieve Local Context (Vector Search)
+    chunks = safe_search_similar_chunks(req.session_id, req.question, k=4)
+    vector_context = "\n\n".join(chunks)
+    
+    # 3. Retrieve Conversation History (Last 6 messages / 3 turns)
+    history_list = session_data.get("chat_history", [])
+    recent_history = history_list[-6:]
+    history_str = ""
+    for msg in recent_history:
+        role = "User" if msg["role"] == "user" else "Assistant"
+        history_str += f"{role}: {msg['content']}\n"
 
+    # 4. Fallback if context is too thin
+    # If no summary and no vector results, use first part of transcript
+    if not summary_context and not vector_context:
+        vector_context = session_data["cleaned"][:4000] # Use first 4k chars as fallback
+
+    # 5. Construct Prompt
     prompt = f"""
-You are a helpful AI Assistant who answers user queries based only on the available context.
-Use the context to answer concisely and, when applicable, point the user to where in the lecture they can read more.
+You are a helpful Tutor Assistant for a student reviewing a lecture.
+Answer the user's question based primarily on the provided context.
 
-Context:
-{context}
+CONTEXT FROM LECTURE:
+{summary_context}
 
-Question:
+SPECIFIC EXCERPTS:
+{vector_context}
+
+CONVERSATION HISTORY:
+{history_str}
+
+USER QUESTION:
 {req.question}
+
+INSTRUCTIONS:
+- Answer concisely and accurately.
+- Use the context to support your answer.
+- If the answer isn't in the context, say you don't have that info from the lecture.
+- Do not make up facts not present in the lecture material.
 """
 
-    answer = await generate_gemini(prompt, max_tokens=700)
+    answer = await generate_gemini(prompt, max_tokens=600, temperature=0.5)
 
-    # Simple confidence heuristic based on number of relevant chunks found
-    confidence = min(0.95, 0.4 + 0.15 * len(chunks))
+    # 6. Update History
+    session_data["chat_history"].append({"role": "user", "content": req.question})
+    session_data["chat_history"].append({"role": "assistant", "content": answer})
+    
+    # Heuristic confidence
+    confidence = 0.9 if chunks else 0.5
+    if len(chunks) > 2: confidence = 0.95
 
-    return {"answer": answer, "confidence": round(confidence, 2), "sources": chunks[:2]}
+    return {
+        "answer": answer,
+        "confidence": confidence,
+        "sources": chunks[:2]
+    }
 
 @app.get("/api/session/{session_id}")
 async def get_session(session_id: str):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    # return basic session info and whether cache exists
     return {
         "session_id": session_id,
-        "transcript": sessions[session_id].get("transcript"),
-        "cleaned_transcript": sessions[session_id].get("cleaned"),
+        "transcript_snippet": sessions[session_id].get("transcript", "")[:200] + "...",
         "created_at": sessions[session_id].get("created_at"),
-        "has_cache": session_id in generation_cache
+        "has_cache": session_id in generation_cache,
+        "history_count": len(sessions[session_id].get("chat_history", []))
     }
 
 @app.delete("/api/session/{session_id}")
@@ -494,8 +516,6 @@ async def delete_session(session_id: str):
     except Exception:
         pass
     return {"message": "deleted"}
-
-# --------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
