@@ -99,16 +99,45 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
   };
 
   /* ---------------- FORMATTER ---------------- */
-  const renderText = (text) =>
-    text?.split("\n").map((l, i) =>
-      l.trim() ? (
-        <p key={i} className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+  const renderText = (text) => {
+    if (!text) return null;
+
+    // If backend already sends an array of paragraphs
+    if (Array.isArray(text)) {
+      return text.map((l, i) => (
+        <p
+          key={i}
+          className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed"
+        >
           {l}
         </p>
-      ) : (
-        <br key={i} />
-      )
+      ));
+    }
+
+    // If backend sends a string
+    if (typeof text === "string") {
+      return text.split("\n").map((l, i) =>
+        l.trim() ? (
+          <p
+            key={i}
+            className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed"
+          >
+            {l}
+          </p>
+        ) : (
+          <br key={i} />
+        )
+      );
+    }
+
+    // Fallback for unexpected shapes (object, number, etc.)
+    return (
+      <p className="text-sm text-slate-500 dark:text-slate-400">
+        Unable to display content.
+      </p>
     );
+  };
+
 
   return (
     <div className="
