@@ -97,20 +97,22 @@ export default function UploadCard({
   return (
     <div
       className="
-      bg-white
+      bg-slate-800/50
+      backdrop-blur-xl
       rounded-3xl
-      border border-slate-200
-      shadow-2xl shadow-slate-900/20
+      border border-slate-700
+      shadow-2xl shadow-slate-900/50
       p-8
       transition-all duration-300
-      hover:shadow-slate-900/30
+      hover:shadow-slate-900/70
       hover:-translate-y-1
+      hover:border-purple-500/50
     "
     >
       {/* Header */}
-      <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-slate-900">
-        <div className="p-2 rounded-xl bg-indigo-100">
-          <Upload className="w-5 h-5 text-indigo-600" />
+      <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-white">
+        <div className="p-2 rounded-xl bg-purple-500/20 border border-purple-500/30">
+          <Upload className="w-5 h-5 text-purple-400" />
         </div>
         Upload Lecture
       </h2>
@@ -138,26 +140,26 @@ export default function UploadCard({
         cursor-pointer
         transition-all duration-300
         ${audioFile
-            ? "border-emerald-400 bg-emerald-50"
-            : "border-slate-300 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
+            ? "border-emerald-400 bg-emerald-500/10"
+            : "border-slate-600 bg-slate-900/50 hover:border-purple-500 hover:bg-purple-500/10"
           }
         ${isUploading || isGenerating
             ? "opacity-50 cursor-not-allowed"
-            : "hover:shadow-md"
+            : "hover:shadow-lg hover:shadow-purple-500/20"
           }
       `}
       >
-        <FileAudio className="w-12 h-12 mx-auto mb-3 text-indigo-600" />
+        <FileAudio className={`w-12 h-12 mx-auto mb-3 ${audioFile ? 'text-emerald-400' : 'text-purple-400'}`} />
 
-        <p className="font-medium text-slate-900">
+        <p className="font-medium text-white">
           {audioFile ? audioFile.name : "Click to upload audio"}
         </p>
 
-        <p className="text-xs text-slate-600 mt-1">
+        <p className="text-xs text-gray-400 mt-1">
           MP3, WAV, M4A, OGG, FLAC
         </p>
 
-        <div className="inline-flex items-center gap-1 mt-4 text-emerald-700 text-xs font-medium">
+        <div className="inline-flex items-center gap-1 mt-4 text-emerald-400 text-xs font-medium">
           <Check className="w-4 h-4" />
           Or paste transcript below
         </div>
@@ -177,23 +179,25 @@ export default function UploadCard({
         disabled={isUploading || isGenerating}
         className="
         w-full mt-5 h-32
-        border border-slate-300
+        border border-slate-600
+        bg-slate-900/50
         rounded-2xl
         p-4
-        text-sm text-slate-900
-        placeholder:text-slate-400
+        text-sm text-white
+        placeholder:text-gray-500
         resize-none
         focus:outline-none
-        focus:ring-2 focus:ring-indigo-500
-        focus:border-indigo-500
+        focus:ring-2 focus:ring-purple-500
+        focus:border-purple-500
         transition-all
-        disabled:bg-slate-100
+        disabled:bg-slate-800/50
+        disabled:text-gray-500
       "
       />
 
       {/* Status */}
       {(isUploading || isGenerating) && (
-        <div className="mt-4 flex items-center gap-2 text-indigo-600 text-sm font-medium">
+        <div className="mt-4 flex items-center gap-2 text-purple-400 text-sm font-medium">
           <Loader2 className="animate-spin w-5 h-5" />
           {isUploading ? "Uploading audio…" : "Generating exam pack…"}
         </div>
@@ -207,14 +211,14 @@ export default function UploadCard({
         onMouseLeave={() => setIsHovered(false)}
         className="
         mt-6 w-full py-4
-        bg-gradient-to-r from-indigo-600 to-blue-600
+        bg-gradient-to-r from-purple-600 to-indigo-600
         text-white
         rounded-2xl
         flex justify-center items-center gap-2
         font-semibold
-        shadow-xl shadow-indigo-600/40
+        shadow-xl shadow-purple-600/40
         transition-all duration-300
-        hover:shadow-2xl hover:shadow-indigo-700/50
+        hover:shadow-2xl hover:shadow-purple-700/50
         hover:-translate-y-0.5
         active:scale-[0.98]
         disabled:opacity-50 disabled:cursor-not-allowed

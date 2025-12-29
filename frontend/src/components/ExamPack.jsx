@@ -28,7 +28,6 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
-  // Reset selected answers when a new examPack is provided
   useEffect(() => {
     setSelectedAnswers({});
     setShowAnswers(false);
@@ -38,16 +37,18 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
   /* ---------------- DATA ---------------- */
   const summaries = examPack?.summary || null;
   const notes = examPack?.notes || null;
-  const questions = examPack?.questions || { mcq_questions: [], short_answer_questions: [], long_answer_questions: [] };
+  const questions = examPack?.questions || {
+    mcq_questions: [],
+    short_answer_questions: [],
+    long_answer_questions: []
+  };
 
-  // normalized access with safe defaults
   const questionMap = {
     mcq: questions?.mcq_questions || [],
     short: questions?.short_answer_questions || [],
     long: questions?.long_answer_questions || []
   };
 
-  const optionLabels = ["A", "B", "C", "D"];
 
   /* ---------------- CONFIDENCE SCORE ---------------- */
   const confidence = useMemo(() => {
@@ -74,7 +75,6 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
 
     try {
       const res = await api.askChatbot(sessionId, payload);
-      // attach confidence and sources returned by backend to the assistant message
       setChatMessages((p) => [
         ...p,
         {
@@ -85,7 +85,6 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
         }
       ]);
     } catch (err) {
-      console.error("Chatbot error:", err);
       setChatMessages((p) => [
         ...p,
         {
@@ -99,64 +98,37 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
     }
   };
 
-  /* ---------------- REGENERATE QUESTIONS ---------------- */
-  const handleRegenerateQuestions = async () => {
-    if (!sessionId || isRegenerating) return;
-    setIsRegenerating(true);
-
-    try {
-      const updatedQuestions = await api.regenerateQuestions(sessionId);
-      // api.regenerateQuestions returns the questions block (per backend)
-      // Merge it into the existing examPack object so component updates.
-      // If parent App keeps examPack in state, ideally App should fetch new pack;
-      // here we update local rendering by mutating a shallow copy.
-      const current = examPack || {};
-      const merged = {
-        ...current,
-        questions: {
-          ...(current.questions || {}),
-          ...updatedQuestions
-        }
-      };
-      // Because parent holds examPack, attempt to update via a custom event:
-      // If parent doesn't listen, we fallback to setting local state by forcing a re-render
-      // (best practice: App should provide a setter; for now we dispatch an event)
-      window.dispatchEvent(new CustomEvent("examPack:updated", { detail: merged }));
-      // Also reset local selections
-      setSelectedAnswers({});
-      setShowAnswers(false);
-    } catch (err) {
-      console.error("Regenerate questions failed:", err);
-      // surface a minimal message through chatMessages area when failure occurs
-      setChatMessages((p) => [
-        ...p,
-        { role: "assistant", content: "Regeneration failed. Try again later.", error: true }
-      ]);
-    } finally {
-      setIsRegenerating(false);
-    }
-  };
-
   /* ---------------- FORMATTER ---------------- */
   const renderText = (text) =>
     text?.split("\n").map((l, i) =>
-      l.trim() ? <p key={i} className="text-sm text-slate-700 leading-relaxed">{l}</p> : <br key={i} />
+      l.trim() ? (
+        <p key={i} className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+          {l}
+        </p>
+      ) : (
+        <br key={i} />
+      )
     );
 
   return (
-    <div
-      className="
-      bg-white
-      rounded-3xl
-      border border-slate-200
-      shadow-2xl shadow-slate-900/20
-      p-8
+    <div className="
+      relative
       h-[780px]
       flex flex-col
-    "
-    >
+      rounded-3xl
+      bg-white/80 dark:bg-slate-800/50
+      backdrop-blur-xl
+      border border-slate-200/60 dark:border-slate-700/60
+      shadow-2xl shadow-slate-900/10
+      p-8
+      transition-all duration-500
+    ">
+
+      {/* Soft glow */}
+      <div className="pointer-events-none absolute inset-0 rounded-3xl bg-gradient-to-br from-indigo-500/10 via-transparent to-purple-500/10 opacity-0 hover:opacity-100 transition-opacity" />
+
       {/* Header */}
-      <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-slate-900">
+      <h2 className="relative text-2xl font-bold mb-6 flex items-center gap-3 text-slate-900 dark:text-white">
         <span className="p-2 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white shadow-lg">
           <Sparkles className="w-5 h-5" />
         </span>
@@ -170,28 +142,29 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
             key={t}
             onClick={() => setActiveTab(t)}
             className={`
-            px-4 py-2 rounded-xl text-sm font-medium capitalize
-            transition-all
-            ${activeTab === t
-                ? "bg-slate-900 text-white shadow"
-                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-              }
-          `}
+              px-4 py-2 rounded-xl text-sm font-medium capitalize
+              transition-all duration-300
+              ${activeTab === t
+                ? "bg-indigo-600 text-white shadow-md scale-[1.03]"
+                : "bg-slate-100/80 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"}
+            `}
           >
             {t}
           </button>
         ))}
       </div>
 
-      {/* CONTENT AREA */}
+      {/* CONTENT */}
       <div className="flex-1 overflow-hidden">
-        <div className="h-full overflow-y-auto pr-2">
+        <div className="h-full overflow-y-auto pr-2 space-y-2">
 
           {/* LOADING */}
           {isGenerating && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-600">
-              <Loader2 className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
-              <p className="font-medium">Generating exam pack…</p>
+            <div className="h-full flex flex-col items-center justify-center text-slate-500 animate-fade-in">
+              <Loader2 className="w-12 h-12 animate-spin mb-4 text-indigo-500" />
+              <p className="font-medium tracking-wide">
+                Generating exam pack…
+              </p>
             </div>
           )}
 
@@ -205,19 +178,19 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                       key={l}
                       onClick={() => setSummaryLength(l)}
                       className={`
-                      px-3 py-1.5 rounded-lg text-xs font-medium
-                      ${summaryLength === l
-                          ? "bg-indigo-600 text-white"
-                          : "bg-slate-100 hover:bg-slate-200"
-                        }
-                    `}
+                        px-3 py-1.5 rounded-lg text-xs font-medium
+                        transition-all
+                        ${summaryLength === l
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"}
+                      `}
                     >
                       {l}
                     </button>
                   ))}
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-3">
+                <div className="bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 rounded-2xl p-6 space-y-3 animate-fade-in">
                   {renderText(summaries[`${summaryLength}_summary`])}
                 </div>
               </>
@@ -229,7 +202,7 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
           {/* NOTES */}
           {!isGenerating && activeTab === "notes" && (
             notes ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-3">
+              <div className="bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 rounded-2xl p-6 space-y-3 animate-fade-in">
                 {renderText(notes)}
               </div>
             ) : (
@@ -252,12 +225,12 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                         setShowAnswers(false);
                       }}
                       className={`
-                      px-3 py-1.5 rounded-lg text-xs font-medium
-                      ${questionType === t
-                          ? "bg-indigo-600 text-white"
-                          : "bg-slate-100 hover:bg-slate-200"
-                        }
-                    `}
+                        px-3 py-1.5 rounded-lg text-xs font-medium
+                        transition-all
+                        ${questionType === t
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"}
+                      `}
                     >
                       {t.toUpperCase()}
                     </button>
@@ -267,9 +240,9 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                 {questionMap[questionType].map((q, i) => (
                   <div
                     key={i}
-                    className="bg-white border border-slate-200 rounded-2xl p-5 mb-4"
+                    className="bg-white/90 dark:bg-slate-900/70 border border-slate-200/60 dark:border-slate-700/60 rounded-2xl p-5 mb-4 transition-all hover:shadow-md animate-fade-in"
                   >
-                    <p className="font-semibold mb-3 text-slate-900">
+                    <p className="font-semibold mb-3 text-slate-900 dark:text-white">
                       {i + 1}. {q.question}
                     </p>
 
@@ -281,14 +254,13 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                         <label
                           key={key}
                           className={`
-                          flex items-center gap-3 p-3 rounded-xl cursor-pointer mb-2
-                          ${showAnswers && correct
-                              ? "bg-emerald-50 border border-emerald-400"
+                            flex items-center gap-3 p-3 rounded-xl cursor-pointer mb-2 transition-all
+                            ${showAnswers && correct
+                              ? "bg-emerald-500/10 border border-emerald-400"
                               : showAnswers && selected && !correct
-                                ? "bg-red-50 border border-red-400"
-                                : "bg-slate-50 hover:bg-slate-100"
-                            }
-                        `}
+                                ? "bg-red-500/10 border border-red-400"
+                                : "bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700"}
+                          `}
                         >
                           <input
                             type="radio"
@@ -298,22 +270,22 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                               setSelectedAnswers({ ...selectedAnswers, [i]: key })
                             }
                           />
-                          <span className="text-sm text-slate-800">
+                          <span className="text-sm text-slate-800 dark:text-slate-200">
                             {key}. {val}
                           </span>
 
                           {showAnswers && correct && (
-                            <CheckCircle className="w-4 h-4 text-emerald-600 ml-auto" />
+                            <CheckCircle className="w-4 h-4 text-emerald-500 ml-auto" />
                           )}
                           {showAnswers && selected && !correct && (
-                            <XCircle className="w-4 h-4 text-red-600 ml-auto" />
+                            <XCircle className="w-4 h-4 text-red-500 ml-auto" />
                           )}
                         </label>
                       );
                     })}
 
                     {showAnswers && q.explanation && (
-                      <p className="text-sm mt-3 text-slate-600">
+                      <p className="text-sm mt-3 text-slate-600 dark:text-slate-400">
                         {q.explanation}
                       </p>
                     )}
@@ -325,10 +297,8 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
 
           {/* CHATBOT */}
           {!isGenerating && activeTab === "chatbot" && sessionId && (
-            <div className="h-full flex flex-col border border-slate-200 rounded-2xl bg-white">
-
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
+            <div className="h-full flex flex-col border border-slate-200/60 dark:border-slate-700/60 rounded-2xl bg-white/80 dark:bg-slate-900/70 backdrop-blur animate-fade-in">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/60 dark:bg-slate-800/40">
                 {chatMessages.length === 0 && (
                   <div className="h-full flex items-center justify-center text-center text-slate-500 text-sm">
                     Ask anything after generating the exam pack.
@@ -336,51 +306,46 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
                 )}
 
                 {chatMessages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
+                  <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div
                       className={`
-                      max-w-[80%] px-4 py-3 rounded-2xl text-sm
-                      ${m.role === "user"
-                          ? "bg-indigo-600 text-white"
-                          : "bg-white border border-slate-200 text-slate-900"
-                        }
-                    `}
+                        max-w-[80%] px-4 py-3 rounded-2xl text-sm animate-fade-in
+                        ${m.role === "user"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-700/60"}
+                      `}
                     >
                       {m.content}
                     </div>
                   </div>
                 ))}
-
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Input */}
-              <div className="p-3 border-t border-slate-200 bg-white flex gap-2">
+              <div className="p-3 border-t border-slate-200/60 dark:border-slate-700/60 bg-white/80 dark:bg-slate-900/80 flex gap-2">
                 <input
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleChatSubmit()}
                   placeholder="Ask a doubt…"
                   className="
-                  flex-1 px-4 py-3
-                  bg-white border border-slate-300
-                  rounded-xl text-slate-900
-                  focus:outline-none focus:ring-2 focus:ring-indigo-500/40
-                "
+                    flex-1 px-4 py-3
+                    bg-white dark:bg-slate-900
+                    border border-slate-300 dark:border-slate-700
+                    rounded-xl
+                    focus:outline-none focus:ring-2 focus:ring-indigo-500/40
+                  "
                 />
                 <button
                   onClick={handleChatSubmit}
                   disabled={isChatLoading || !chatInput.trim()}
                   className="
-                  px-4 py-3 rounded-xl
-                  bg-indigo-600 hover:bg-indigo-700
-                  text-white
-                  transition-all
-                  disabled:opacity-50
-                "
+                    px-4 py-3 rounded-xl
+                    bg-indigo-600 hover:bg-indigo-700
+                    text-white
+                    transition-all
+                    disabled:opacity-50
+                  "
                 >
                   {isChatLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -396,15 +361,16 @@ export default function ExamPack({ sessionId, examPack, isGenerating }) {
     </div>
   );
 }
+
 /* ---------- EMPTY STATE ---------- */
 function EmptyState({ text }) {
   return (
-    <div className="h-full flex items-center justify-center">
+    <div className="h-full flex items-center justify-center animate-fade-in">
       <div className="text-center max-w-md">
-        <div className="mx-auto mb-4 w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
+        <div className="mx-auto mb-4 w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
           <Sparkles className="w-5 h-5 text-slate-400" />
         </div>
-        <p className="text-sm text-slate-500 leading-relaxed">
+        <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
           {text}
         </p>
       </div>
