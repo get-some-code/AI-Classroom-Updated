@@ -1,73 +1,86 @@
+import { supabase } from "./supabase";
+
 const API_BASE_URL = "http://localhost:8000";
 
 class PreplyAPI {
-  /* ---------------- UPLOAD ---------------- */
+  /* ---------------- INTERNAL ---------------- */
 
-  async uploadTranscript(transcript) {
-    const res = await fetch(`${API_BASE_URL}/api/upload-transcript`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transcript }),
+  async authFetch(url, options = {}) {
+    // Try to get session
+    let {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    // 🔐 Handle race condition right after login
+    if (!session) {
+      await new Promise((res) => setTimeout(res, 150));
+      ({
+        data: { session },
+      } = await supabase.auth.getSession());
+    }
+
+    if (!session?.access_token) {
+      throw new Error("Unauthorized: No active session");
+    }
+
+    const headers = {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${session.access_token}`,
+    };
+
+    const res = await fetch(url, {
+      ...options,
+      headers,
     });
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(err || "Transcript upload failed");
+      throw new Error(err || "API request failed");
     }
 
-    return res.json(); // { session_id }
+    return res.json();
+  }
+
+
+  /* ---------------- UPLOAD ---------------- */
+
+  async uploadTranscript(transcript) {
+    return this.authFetch(`${API_BASE_URL}/api/upload-transcript`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript }),
+    });
   }
 
   async uploadAudio(file) {
     const fd = new FormData();
     fd.append("file", file);
 
-    const res = await fetch(`${API_BASE_URL}/api/upload-audio`, {
+    return this.authFetch(`${API_BASE_URL}/api/upload-audio`, {
       method: "POST",
       body: fd,
     });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || "Audio upload failed");
-    }
-
-    return res.json(); // { session_id, transcript, cleaned_transcript }
   }
 
   /* ---------------- EXAM PACK ---------------- */
 
   async generateExamPack(sessionId) {
-    const res = await fetch(
+    return this.authFetch(
       `${API_BASE_URL}/api/generate-exam-pack/${sessionId}`
     );
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || "Exam pack generation failed");
-    }
-
-    return res.json(); // { summary, notes, questions }
   }
 
   async regenerateQuestions(sessionId) {
-    const res = await fetch(
+    return this.authFetch(
       `${API_BASE_URL}/api/regenerate-questions/${sessionId}`,
       { method: "POST" }
     );
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || "Question regeneration failed");
-    }
-
-    return res.json(); // questions only
   }
 
   /* ---------------- CHATBOT ---------------- */
 
   async askChatbot(sessionId, question) {
-    const res = await fetch(`${API_BASE_URL}/api/chatbot`, {
+    return this.authFetch(`${API_BASE_URL}/api/chatbot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -75,13 +88,6 @@ class PreplyAPI {
         question,
       }),
     });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || "Chatbot failed");
-    }
-
-    return res.json(); // { answer, confidence, sources }
   }
 }
 

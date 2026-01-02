@@ -1,15 +1,31 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import LandingPage from "./pages/LandingPage.jsx";
-import AppPage from "./pages/AppPage.jsx";
+import { AuthProvider } from "./context/AuthContext";
+import LandingPage from "./pages/LandingPage";
+import AppPage from "./pages/AppPage";
+import LoginPage from "./pages/LoginPage";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/app" element={<AppPage />} />
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* Protected */}
+          <Route
+            path="/app"
+            element={
+              <ProtectedRoute>
+                <AppPage />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 

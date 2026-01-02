@@ -22,6 +22,9 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from sentence_transformers import SentenceTransformer
 
+from auth import get_current_user
+from fastapi import Depends
+
 # --------------------------------------------------
 # APP SETUP
 # --------------------------------------------------
@@ -253,7 +256,7 @@ def normalize_mcq_list(mcqs: List[dict]) -> List[dict]:
 # --------------------------------------------------
 
 @app.post("/api/upload-audio")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), user: Any = Depends(get_current_user)):
     global whisper_model
     if not file.filename.lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm")):
         raise HTTPException(status_code=400, detail="Unsupported audio format")
@@ -289,7 +292,7 @@ async def upload_audio(file: UploadFile = File(...)):
             pass
 
 @app.post("/api/upload-transcript")
-async def upload_transcript(req: TranscriptRequest):
+async def upload_transcript(req: TranscriptRequest, user: Any = Depends(get_current_user)):
     if not req.transcript or not req.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript empty")
 
@@ -308,7 +311,7 @@ async def upload_transcript(req: TranscriptRequest):
     return {"session_id": session_id, "transcript": raw, "cleaned_transcript": cleaned}
 
 @app.get("/api/generate-exam-pack/{session_id}")
-async def generate_exam_pack(session_id: str):
+async def generate_exam_pack(session_id: str, user: Any = Depends(get_current_user)):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -376,7 +379,7 @@ TRANSCRIPT:
     return data
 
 @app.post("/api/regenerate-questions/{session_id}")
-async def regenerate_questions(session_id: str):
+async def regenerate_questions(session_id: str, user: Any = Depends(get_current_user)):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
@@ -418,7 +421,7 @@ Transcript:
     return new_questions
 
 @app.post("/api/chatbot")
-async def chatbot(req: ChatMessage):
+async def chatbot(req: ChatMessage, user: Any = Depends(get_current_user)):
     """
     Stateful chatbot endpoint.
     Uses: 
@@ -496,7 +499,7 @@ INSTRUCTIONS:
     }
 
 @app.get("/api/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, user: Any = Depends(get_current_user)):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     return {
@@ -508,7 +511,7 @@ async def get_session(session_id: str):
     }
 
 @app.delete("/api/session/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, user: Any = Depends(get_current_user)):
     sessions.pop(session_id, None)
     generation_cache.pop(session_id, None)
     try:
